@@ -1,0 +1,200 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default deny all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        (request.auth.token.email == "bussostudio6@gmail.com" && (request.auth.token.email_verified == true || request.auth.token.firebase.sign_in_provider == "google.com")) ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    // Admin bootstrap collection
+    match /admins/{adminId} {
+      allow read: if isSignedIn();
+      // Allow bootstrap creation if matching admin email or if admin
+      allow create: if isSignedIn() && (
+        (request.auth.uid == adminId && request.auth.token.email == "bussostudio6@gmail.com") ||
+        isAdmin()
+      );
+      allow update, delete: if isAdmin();
+    }
+
+    // Users collection
+    match /users/{userId} {
+      allow read: if true;
+      allow create: if isSignedIn() && request.auth.uid == userId && (
+        request.resource.data.role == "client" || isAdmin()
+      );
+      allow update: if isSignedIn() && (
+        (request.auth.uid == userId && (
+          // Non-admins cannot elevate themselves to admin role
+          request.resource.data.role == resource.data.role || isAdmin()
+        )) ||
+        isAdmin()
+      );
+      allow delete: if isOwner(userId) || isAdmin();
+    }
+
+    // Posts collection
+    match /posts/{postId} {
+      allow read: if resource.data.visibility == "public" || (isSignedIn() && (resource.data.authorId == request.auth.uid || isAdmin()));
+      allow create: if isSignedIn() && request.resource.data.authorId == request.auth.uid && (
+        !request.resource.data.isAuthorAdmin || isAdmin()
+      );
+      allow update: if isSignedIn() && (
+        (resource.data.authorId == request.auth.uid) ||
+        isAdmin() ||
+        // Allow updating likesCount or commentsCount for interaction
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['likesCount', 'commentsCount', 'updatedAt'])
+      );
+      allow delete: if isSignedIn() && (resource.data.authorId == request.auth.uid || isAdmin());
+
+      // Comments subcollection
+      match /comments/{commentId} {
+        allow read: if true;
+        allow create: if isSignedIn() && request.resource.data.authorId == request.auth.uid;
+        allow update, delete: if isSignedIn() && (resource.data.authorId == request.auth.uid || isAdmin());
+      }
+
+      // Likes subcollection
+      match /likes/{likeId} {
+        allow read: if true;
+        allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+        allow delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      }
+    }
+
+    // Friend requests
+    match /friendRequests/{requestId} {
+      allow read: if isSignedIn() && (
+        resource.data.senderId == request.auth.uid ||
+        resource.data.receiverId == request.auth.uid ||
+        isAdmin()
+      );
+      allow create: if isSignedIn() && request.resource.data.senderId == request.auth.uid;
+      allow update: if isSignedIn() && (
+        resource.data.receiverId == request.auth.uid ||
+        resource.data.senderId == request.auth.uid ||
+        isAdmin()
+      );
+      allow delete: if isSignedIn() && (
+        resource.data.senderId == request.auth.uid ||
+        resource.data.receiverId == request.auth.uid ||
+        isAdmin()
+      );
+    }
+
+    // Friendships
+    match /friendships/{friendshipId} {
+      allow read: if isSignedIn() && (
+        resource.data.userA == request.auth.uid ||
+        resource.data.userB == request.auth.uid ||
+        isAdmin()
+      );
+      allow create: if isSignedIn() && (
+        request.resource.data.userA == request.auth.uid ||
+        request.resource.data.userB == request.auth.uid ||
+        isAdmin()
+      );
+      allow delete: if isSignedIn() && (
+        resource.data.userA == request.auth.uid ||
+        resource.data.userB == request.auth.uid ||
+        isAdmin()
+      );
+    }
+
+    // Follows
+    match /follows/{followId} {
+      allow read: if true;
+      allow create: if isSignedIn() && request.resource.data.followerId == request.auth.uid;
+      allow delete: if isSignedIn() && (resource.data.followerId == request.auth.uid || isAdmin());
+    }
+
+    // Conversations
+    match /conversations/{conversationId} {
+      allow read: if isSignedIn() && (
+        request.auth.uid in resource.data.participants ||
+        resource.data.isAiAssistant == true ||
+        isAdmin()
+      );
+      allow create: if isSignedIn() && (
+        request.auth.uid in request.resource.data.participants ||
+        request.resource.data.isAiAssistant == true ||
+        isAdmin()
+      );
+      allow update: if isSignedIn() && (
+        request.auth.uid in resource.data.participants ||
+        resource.data.isAiAssistant == true ||
+        isAdmin()
+      );
+      allow delete: if isAdmin();
+
+      // Messages in conversation
+      match /messages/{messageId} {
+        allow read: if isSignedIn() && (
+          request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants ||
+          get(/databases/$(database)/documents/conversations/$(conversationId)).data.isAiAssistant == true ||
+          isAdmin()
+        );
+        allow create: if isSignedIn() && (
+          request.resource.data.senderId == request.auth.uid ||
+          get(/databases/$(database)/documents/conversations/$(conversationId)).data.isAiAssistant == true ||
+          isAdmin()
+        );
+        allow update, delete: if isSignedIn() && (
+          resource.data.senderId == request.auth.uid ||
+          isAdmin()
+        );
+      }
+    }
+
+    // Notifications
+    match /notifications/{notificationId} {
+      allow read: if isSignedIn() && (resource.data.recipientId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn();
+      allow update: if isSignedIn() && (
+        resource.data.recipientId == request.auth.uid &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRead'])
+      );
+      allow delete: if isSignedIn() && (resource.data.recipientId == request.auth.uid || isAdmin());
+    }
+
+    // Client Galleries
+    match /galleries/{galleryId} {
+      // Anyone with access token or public consent or admin can read
+      allow read: if true;
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin() || (
+        // Allow client to update their own consent status
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['clientConsentStatus', 'clientConsentDate', 'downloadCount', 'updatedAt'])
+      );
+
+      // Gallery Items
+      match /items/{itemId} {
+        allow read: if true;
+        allow create, update, delete: if isAdmin();
+      }
+    }
+
+    // Site settings
+    match /settings/{settingId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+  }
+}

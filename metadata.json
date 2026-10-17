@@ -1,0 +1,6 @@
+{
+  "name": "hey Teddy,",
+  "description": "Plateforme photographique et réseau social visuel haut de gamme pour Teddy — Galeries privées, livraison de photos haute résolution et communauté.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
